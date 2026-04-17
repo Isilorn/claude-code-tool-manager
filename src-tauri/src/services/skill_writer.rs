@@ -1,4 +1,5 @@
 use crate::db::models::Skill;
+use crate::services::remote::FileOps;
 use crate::utils::opencode_paths::get_opencode_paths;
 use anyhow::Result;
 use directories::BaseDirs;
@@ -74,52 +75,52 @@ pub(crate) fn generate_skill_markdown(skill: &Skill) -> String {
 
 /// Write a skill to the appropriate location
 /// Skills go to {base_path}/.claude/skills/{name}/SKILL.md
-pub fn write_skill_file(base_path: &Path, skill: &Skill) -> Result<()> {
+pub fn write_skill_file(base_path: &Path, skill: &Skill, file_ops: &dyn FileOps) -> Result<()> {
     let skill_dir = base_path.join(".claude").join("skills").join(&skill.name);
-    std::fs::create_dir_all(&skill_dir)?;
+    file_ops.create_dir_all(&skill_dir)?;
 
     let file_path = skill_dir.join("SKILL.md");
-    crate::utils::backup::backup_file(&file_path)?;
+    file_ops.backup(&file_path)?;
     let content = generate_skill_markdown(skill);
-    std::fs::write(file_path, content)?;
+    file_ops.write_string(&file_path, &content)?;
 
     Ok(())
 }
 
 /// Delete a skill file from the appropriate location
-pub fn delete_skill_file(base_path: &Path, skill: &Skill) -> Result<()> {
+pub fn delete_skill_file(base_path: &Path, skill: &Skill, file_ops: &dyn FileOps) -> Result<()> {
     let skill_dir = base_path.join(".claude").join("skills").join(&skill.name);
-    if skill_dir.exists() {
-        std::fs::remove_dir_all(skill_dir)?;
+    if file_ops.exists(&skill_dir) {
+        file_ops.remove_dir(&skill_dir)?;
     }
 
     Ok(())
 }
 
 /// Write a skill to the global Claude config (~/.claude/)
-pub fn write_global_skill(skill: &Skill) -> Result<()> {
+pub fn write_global_skill(skill: &Skill, file_ops: &dyn FileOps) -> Result<()> {
     let base_dirs =
         BaseDirs::new().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
     let home = base_dirs.home_dir();
-    write_skill_file(home, skill)
+    write_skill_file(home, skill, file_ops)
 }
 
 /// Delete a skill from the global Claude config (~/.claude/)
-pub fn delete_global_skill(skill: &Skill) -> Result<()> {
+pub fn delete_global_skill(skill: &Skill, file_ops: &dyn FileOps) -> Result<()> {
     let base_dirs =
         BaseDirs::new().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
     let home = base_dirs.home_dir();
-    delete_skill_file(home, skill)
+    delete_skill_file(home, skill, file_ops)
 }
 
 /// Write a skill to a project's Claude config ({project}/.claude/)
-pub fn write_project_skill(project_path: &Path, skill: &Skill) -> Result<()> {
-    write_skill_file(project_path, skill)
+pub fn write_project_skill(project_path: &Path, skill: &Skill, file_ops: &dyn FileOps) -> Result<()> {
+    write_skill_file(project_path, skill, file_ops)
 }
 
 /// Delete a skill from a project's Claude config ({project}/.claude/)
-pub fn delete_project_skill(project_path: &Path, skill: &Skill) -> Result<()> {
-    delete_skill_file(project_path, skill)
+pub fn delete_project_skill(project_path: &Path, skill: &Skill, file_ops: &dyn FileOps) -> Result<()> {
+    delete_skill_file(project_path, skill, file_ops)
 }
 
 // ============================================================================
@@ -177,6 +178,7 @@ pub fn delete_project_skill_opencode(project_path: &Path, skill: &Skill) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::remote::LocalFileOps;
     use tempfile::TempDir;
 
     // =========================================================================
@@ -280,7 +282,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let skill = sample_skill();
 
-        write_skill_file(temp_dir.path(), &skill).unwrap();
+        write_skill_file(temp_dir.path(), &skill, &LocalFileOps).unwrap();
 
         let expected_path = temp_dir
             .path()
@@ -296,7 +298,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let skill = sample_skill();
 
-        write_skill_file(temp_dir.path(), &skill).unwrap();
+        write_skill_file(temp_dir.path(), &skill, &LocalFileOps).unwrap();
 
         let file_path = temp_dir
             .path()
@@ -320,7 +322,7 @@ mod tests {
         let skill = sample_skill();
 
         // Write first
-        write_skill_file(temp_dir.path(), &skill).unwrap();
+        write_skill_file(temp_dir.path(), &skill, &LocalFileOps).unwrap();
         let skill_dir = temp_dir
             .path()
             .join(".claude")
@@ -329,7 +331,7 @@ mod tests {
         assert!(skill_dir.exists());
 
         // Delete
-        delete_skill_file(temp_dir.path(), &skill).unwrap();
+        delete_skill_file(temp_dir.path(), &skill, &LocalFileOps).unwrap();
         assert!(!skill_dir.exists());
     }
 
@@ -339,7 +341,7 @@ mod tests {
         let skill = sample_skill();
 
         // Should not error when file doesn't exist
-        let result = delete_skill_file(temp_dir.path(), &skill);
+        let result = delete_skill_file(temp_dir.path(), &skill, &LocalFileOps);
         assert!(result.is_ok());
     }
 
@@ -403,7 +405,7 @@ mod tests {
     fn test_write_project_skill() {
         let temp_dir = TempDir::new().unwrap();
         let skill = sample_skill();
-        write_project_skill(temp_dir.path(), &skill).unwrap();
+        write_project_skill(temp_dir.path(), &skill, &LocalFileOps).unwrap();
 
         let expected = temp_dir
             .path()
@@ -418,8 +420,8 @@ mod tests {
     fn test_delete_project_skill() {
         let temp_dir = TempDir::new().unwrap();
         let skill = sample_skill();
-        write_project_skill(temp_dir.path(), &skill).unwrap();
-        delete_project_skill(temp_dir.path(), &skill).unwrap();
+        write_project_skill(temp_dir.path(), &skill, &LocalFileOps).unwrap();
+        delete_project_skill(temp_dir.path(), &skill, &LocalFileOps).unwrap();
 
         let expected = temp_dir
             .path()
@@ -471,11 +473,11 @@ mod tests {
     fn test_write_skill_overwrite() {
         let temp_dir = TempDir::new().unwrap();
         let mut skill = sample_skill();
-        write_skill_file(temp_dir.path(), &skill).unwrap();
+        write_skill_file(temp_dir.path(), &skill, &LocalFileOps).unwrap();
 
         // Update content and write again
         skill.content = "Updated content".to_string();
-        write_skill_file(temp_dir.path(), &skill).unwrap();
+        write_skill_file(temp_dir.path(), &skill, &LocalFileOps).unwrap();
 
         let file_path = temp_dir
             .path()

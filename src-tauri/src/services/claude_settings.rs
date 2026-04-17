@@ -1,3 +1,4 @@
+use crate::services::remote::FileOps;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -97,9 +98,9 @@ pub struct AllClaudeSettings {
 }
 
 /// Read an existing settings.json file or return an empty object
-fn read_settings_file(path: &Path) -> Result<Value> {
-    if path.exists() {
-        let content = std::fs::read_to_string(path)?;
+fn read_settings_file(path: &Path, file_ops: &dyn FileOps) -> Result<Value> {
+    if file_ops.exists(path) {
+        let content = file_ops.read_string(path)?;
         Ok(serde_json::from_str(&content).unwrap_or(json!({})))
     } else {
         Ok(json!({}))
@@ -107,13 +108,13 @@ fn read_settings_file(path: &Path) -> Result<Value> {
 }
 
 /// Write settings.json file
-fn write_settings_file(path: &Path, settings: &Value) -> Result<()> {
+fn write_settings_file(path: &Path, settings: &Value, file_ops: &dyn FileOps) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        file_ops.create_dir_all(parent)?;
     }
-    crate::utils::backup::backup_file(path)?;
+    file_ops.backup(path)?;
     let content = serde_json::to_string_pretty(settings)?;
-    std::fs::write(path, content)?;
+    file_ops.write_string(path, &content)?;
     Ok(())
 }
 
@@ -140,8 +141,8 @@ fn extract_optional_string_array(value: &Value, key: &str) -> Option<Vec<String>
 }
 
 /// Read claude settings from a single settings file
-pub fn read_claude_settings_from_file(path: &Path, scope: &str) -> Result<ClaudeSettings> {
-    let settings = read_settings_file(path)?;
+pub fn read_claude_settings_from_file(path: &Path, scope: &str, file_ops: &dyn FileOps) -> Result<ClaudeSettings> {
+    let settings = read_settings_file(path, file_ops)?;
 
     let model = settings
         .get("model")
@@ -332,20 +333,19 @@ pub fn read_claude_settings_from_file(path: &Path, scope: &str) -> Result<Claude
 }
 
 /// Read claude settings from all three scopes
-pub fn read_all_claude_settings(project_path: Option<&Path>) -> Result<AllClaudeSettings> {
-    // User scope (always available)
+pub fn read_all_claude_settings(project_path: Option<&Path>, file_ops: &dyn FileOps) -> Result<AllClaudeSettings> {
     let user_path = resolve_settings_path(&PermissionScope::User, None)?;
-    let user = read_claude_settings_from_file(&user_path, "user")?;
+    let user = read_claude_settings_from_file(&user_path, "user", file_ops)?;
 
-    // Project + Local scopes (only if project path provided)
     let (project, local) = if let Some(pp) = project_path {
         let project_path_buf = resolve_settings_path(&PermissionScope::Project, Some(pp))?;
         let local_path = resolve_settings_path(&PermissionScope::Local, Some(pp))?;
 
-        let project_settings = if project_path_buf.exists() {
+        let project_settings = if file_ops.exists(&project_path_buf) {
             Some(read_claude_settings_from_file(
                 &project_path_buf,
                 "project",
+                file_ops,
             )?)
         } else {
             Some(ClaudeSettings {
@@ -392,8 +392,8 @@ pub fn read_all_claude_settings(project_path: Option<&Path>) -> Result<AllClaude
             })
         };
 
-        let local_settings = if local_path.exists() {
-            Some(read_claude_settings_from_file(&local_path, "local")?)
+        let local_settings = if file_ops.exists(&local_path) {
+            Some(read_claude_settings_from_file(&local_path, "local", file_ops)?)
         } else {
             Some(ClaudeSettings {
                 scope: "local".to_string(),
@@ -456,9 +456,10 @@ pub fn write_claude_settings(
     scope: &PermissionScope,
     project_path: Option<&Path>,
     settings: &ClaudeSettings,
+    file_ops: &dyn FileOps,
 ) -> Result<()> {
     let path = resolve_settings_path(scope, project_path)?;
-    let mut file_settings = read_settings_file(&path)?;
+    let mut file_settings = read_settings_file(&path, file_ops)?;
 
     // Model config: set or remove top-level keys
     set_or_remove_string(&mut file_settings, "model", &settings.model);
@@ -749,7 +750,7 @@ pub fn write_claude_settings(
         &settings.force_login_org_uuid,
     );
 
-    write_settings_file(&path, &file_settings)
+    write_settings_file(&path, &file_settings, file_ops)
 }
 
 /// Helper: set a JSON Value key or remove it if None
@@ -839,6 +840,7 @@ fn set_or_remove_string_array(settings: &mut Value, key: &str, value: &Option<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::remote::LocalFileOps;
 
     #[test]
     fn test_read_claude_settings_from_empty_file() {
@@ -846,7 +848,7 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "{}").unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         assert!(settings.model.is_none());
         assert!(settings.available_models.is_empty());
         assert!(settings.output_style.is_none());
@@ -898,7 +900,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         assert_eq!(
             settings.model,
             Some("claude-sonnet-4-5-20250929".to_string())
@@ -962,7 +964,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -1036,7 +1038,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let json: Value = serde_json::from_str(&content).unwrap();
@@ -1100,7 +1102,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         // Now write with None values to clear
         let clear_settings = ClaudeSettings {
@@ -1146,7 +1148,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &clear_settings)
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &clear_settings, &LocalFileOps)
             .unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
@@ -1166,7 +1168,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nonexistent.json");
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         assert!(settings.model.is_none());
         assert!(settings.available_models.is_empty());
     }
@@ -1197,7 +1199,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         let sandbox = settings.sandbox.unwrap();
         assert_eq!(sandbox.enabled, Some(true));
         assert_eq!(sandbox.auto_allow_bash_if_sandboxed, Some(true));
@@ -1285,7 +1287,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -1365,7 +1367,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let json: Value = serde_json::from_str(&content).unwrap();
@@ -1430,7 +1432,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -1481,7 +1483,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &clear_settings)
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &clear_settings, &LocalFileOps)
             .unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -1510,7 +1512,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
 
         let plugins = settings.enabled_plugins.unwrap();
         assert_eq!(plugins["my-plugin"], true);
@@ -1539,7 +1541,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         let env = settings.env.unwrap();
         assert_eq!(env["ANTHROPIC_API_KEY"], "sk-test");
         assert_eq!(env["CLAUDE_CODE_MAX_TURNS"], "10");
@@ -1561,7 +1563,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         assert_eq!(settings.show_turn_duration, Some(true));
         assert_eq!(settings.spinner_tips_enabled, Some(false));
         assert_eq!(settings.terminal_progress_bar_enabled, Some(true));
@@ -1624,7 +1626,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -1687,7 +1689,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -1749,7 +1751,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         // Now clear all
         let clear = ClaudeSettings {
@@ -1795,7 +1797,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &clear).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &clear, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -1826,7 +1828,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         assert_eq!(settings.file_suggestion_type, Some("command".to_string()));
         assert_eq!(
             settings.file_suggestion_command,
@@ -1882,7 +1884,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -1940,10 +1942,10 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
-        let read_back = read_claude_settings_from_file(&path, "local").unwrap();
+        let read_back = read_claude_settings_from_file(&path, "local", &LocalFileOps).unwrap();
         assert_eq!(read_back.file_suggestion_type, Some("command".to_string()));
         assert_eq!(
             read_back.file_suggestion_command,
@@ -1966,7 +1968,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         assert_eq!(settings.cleanup_period_days, Some(14));
         assert_eq!(settings.auto_updates_channel, Some("stable".to_string()));
         assert_eq!(settings.teammate_mode, Some("tmux".to_string()));
@@ -2024,7 +2026,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -2051,7 +2053,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         assert_eq!(
             settings.api_key_helper,
             Some("/usr/bin/get-api-key".to_string())
@@ -2118,7 +2120,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -2144,7 +2146,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         assert_eq!(settings.enable_all_project_mcp_servers, Some(true));
         assert_eq!(
             settings.enabled_mcpjson_servers,
@@ -2204,7 +2206,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -2222,7 +2224,7 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "not valid json {{{").unwrap();
 
-        let result = read_settings_file(&path).unwrap();
+        let result = read_settings_file(&path, &LocalFileOps).unwrap();
         assert_eq!(result, json!({}));
     }
 
@@ -2231,7 +2233,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nonexistent.json");
 
-        let result = read_settings_file(&path).unwrap();
+        let result = read_settings_file(&path, &LocalFileOps).unwrap();
         assert_eq!(result, json!({}));
     }
 
@@ -2240,7 +2242,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("deep").join("settings.json");
 
-        write_settings_file(&path, &json!({"test": true})).unwrap();
+        write_settings_file(&path, &json!({"test": true}), &LocalFileOps).unwrap();
 
         assert!(path.exists());
         let content = std::fs::read_to_string(&path).unwrap();
@@ -2295,7 +2297,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         assert_eq!(settings.allow_managed_hooks_only, Some(true));
         assert_eq!(settings.allow_managed_permission_rules_only, Some(false));
         assert_eq!(settings.disable_bypass_permissions_mode, Some(true));
@@ -2380,7 +2382,7 @@ mod tests {
         };
 
         // Write directly to file (bypassing scope resolution)
-        let mut file_settings = read_settings_file(&path).unwrap();
+        let mut file_settings = read_settings_file(&path, &LocalFileOps).unwrap();
 
         // Test sandbox serialization with null network
         let sandbox_value = serde_json::to_value(&settings.sandbox.as_ref().unwrap()).unwrap();
@@ -2483,7 +2485,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         // Now clear all
         let clear = ClaudeSettings {
@@ -2529,7 +2531,7 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &clear).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &clear, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -2567,7 +2569,7 @@ mod tests {
         )
         .unwrap();
 
-        let settings = read_claude_settings_from_file(&path, "user").unwrap();
+        let settings = read_claude_settings_from_file(&path, "user", &LocalFileOps).unwrap();
         let team = settings.agent_team.unwrap();
         assert_eq!(team.get("enabled").and_then(|v| v.as_bool()), Some(true));
         let members = team.get("members").and_then(|v| v.as_array()).unwrap();
@@ -2637,10 +2639,10 @@ mod tests {
             force_login_org_uuid: None,
         };
 
-        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings).unwrap();
+        write_claude_settings(&PermissionScope::Local, Some(project_path), &settings, &LocalFileOps).unwrap();
 
         let path = project_path.join(".claude").join("settings.local.json");
-        let read_back = read_claude_settings_from_file(&path, "local").unwrap();
+        let read_back = read_claude_settings_from_file(&path, "local", &LocalFileOps).unwrap();
         let team = read_back.agent_team.unwrap();
         assert_eq!(team.get("enabled").and_then(|v| v.as_bool()), Some(true));
         let members = team.get("members").and_then(|v| v.as_array()).unwrap();

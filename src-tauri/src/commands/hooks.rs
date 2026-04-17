@@ -1,6 +1,7 @@
 use crate::db::models::{CreateHookRequest, GlobalHook, Hook, ProjectHook};
 use crate::db::schema::Database;
 use crate::services::hook_writer;
+use crate::services::remote::LocalFileOps;
 use log::{error, info};
 use rusqlite::params;
 use std::path::Path;
@@ -90,7 +91,7 @@ fn sync_global_hooks(db: &Database) -> Result<(), String> {
         .filter_map(|r| r.ok())
         .collect();
 
-    hook_writer::write_global_hooks(&hooks).map_err(|e| e.to_string())
+    hook_writer::write_global_hooks(&hooks, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 // Helper to get all enabled project hooks and write to settings.local.json
@@ -112,7 +113,7 @@ fn sync_project_hooks(db: &Database, project_path: &str) -> Result<(), String> {
         .filter_map(|r| r.ok())
         .collect();
 
-    hook_writer::write_project_hooks(Path::new(project_path), &hooks).map_err(|e| e.to_string())
+    hook_writer::write_project_hooks(Path::new(project_path), &hooks, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 // CRUD Operations

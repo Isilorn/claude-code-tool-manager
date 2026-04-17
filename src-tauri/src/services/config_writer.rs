@@ -1,3 +1,4 @@
+use crate::services::remote::FileOps;
 use crate::utils::paths::ClaudePathsInternal;
 use anyhow::Result;
 use serde_json::{json, Map, Value};
@@ -94,12 +95,11 @@ pub fn generate_mcp_config(mcps: &[McpTuple]) -> Value {
     json!({ "mcpServers": servers })
 }
 
-pub fn write_project_config(project_path: &Path, mcps: &[McpTuple]) -> Result<()> {
+pub fn write_project_config(project_path: &Path, mcps: &[McpTuple], file_ops: &dyn FileOps) -> Result<()> {
     let config_path = project_path.join(".mcp.json");
 
-    // Read existing .mcp.json or create new
-    let mut existing: Value = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
+    let mut existing: Value = if file_ops.exists(&config_path) {
+        let content = file_ops.read_string(&config_path)?;
         serde_json::from_str(&content).map_err(|e| {
             anyhow::anyhow!(
                 "Failed to parse existing .mcp.json at {}: {}. \
@@ -112,24 +112,21 @@ pub fn write_project_config(project_path: &Path, mcps: &[McpTuple]) -> Result<()
         json!({})
     };
 
-    // Merge DB-managed mcpServers into existing config
     let mcp_config = generate_mcp_config(mcps);
     if let Some(servers) = mcp_config.get("mcpServers") {
         existing["mcpServers"] = servers.clone();
     }
 
-    // Back up existing file before writing
-    backup_config_file(&config_path)?;
+    file_ops.backup(&config_path)?;
 
     let content = serde_json::to_string_pretty(&existing)?;
-    std::fs::write(&config_path, content)?;
+    file_ops.write_string(&config_path, &content)?;
     Ok(())
 }
 
-pub fn write_global_config(paths: &ClaudePathsInternal, mcps: &[McpTuple]) -> Result<()> {
-    // Read existing ~/.claude.json or create new
-    let mut claude_json: Value = if paths.claude_json.exists() {
-        let content = std::fs::read_to_string(&paths.claude_json)?;
+pub fn write_global_config(paths: &ClaudePathsInternal, mcps: &[McpTuple], file_ops: &dyn FileOps) -> Result<()> {
+    let mut claude_json: Value = if file_ops.exists(&paths.claude_json) {
+        let content = file_ops.read_string(&paths.claude_json)?;
         serde_json::from_str(&content).map_err(|e| {
             anyhow::anyhow!(
                 "Failed to parse existing Claude config at {}: {}. \
@@ -142,18 +139,15 @@ pub fn write_global_config(paths: &ClaudePathsInternal, mcps: &[McpTuple]) -> Re
         json!({})
     };
 
-    // Build mcpServers object
     let mcp_config = generate_mcp_config(mcps);
     if let Some(servers) = mcp_config.get("mcpServers") {
         claude_json["mcpServers"] = servers.clone();
     }
 
-    // Back up the existing file before modifying it
-    backup_config_file(&paths.claude_json)?;
+    file_ops.backup(&paths.claude_json)?;
 
-    // Write back to ~/.claude.json
     let content = serde_json::to_string_pretty(&claude_json)?;
-    std::fs::write(&paths.claude_json, content)?;
+    file_ops.write_string(&paths.claude_json, &content)?;
 
     Ok(())
 }
@@ -175,12 +169,12 @@ pub fn write_project_to_claude_json(
     paths: &ClaudePathsInternal,
     project_path: &str,
     mcps: &[McpWithEnabledTuple],
+    file_ops: &dyn FileOps,
 ) -> Result<()> {
     use crate::utils::paths::normalize_path;
 
-    // Read existing claude.json
-    let mut claude_json: Value = if paths.claude_json.exists() {
-        let content = std::fs::read_to_string(&paths.claude_json)?;
+    let mut claude_json: Value = if file_ops.exists(&paths.claude_json) {
+        let content = file_ops.read_string(&paths.claude_json)?;
         serde_json::from_str(&content).map_err(|e| {
             anyhow::anyhow!(
                 "Failed to parse existing Claude config at {}: {}. \
@@ -302,12 +296,10 @@ pub fn write_project_to_claude_json(
     project["mcpServers"] = Value::Object(mcp_servers);
     project["disabledMcpServers"] = json!(disabled_mcps);
 
-    // Back up the existing file before modifying it
-    backup_config_file(&paths.claude_json)?;
+    file_ops.backup(&paths.claude_json)?;
 
-    // Write back
     let content = serde_json::to_string_pretty(&claude_json)?;
-    std::fs::write(&paths.claude_json, content)?;
+    file_ops.write_string(&paths.claude_json, &content)?;
 
     Ok(())
 }
@@ -315,6 +307,7 @@ pub fn write_project_to_claude_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::remote::LocalFileOps;
     use insta::assert_json_snapshot;
     use tempfile::TempDir;
 
@@ -469,7 +462,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let mcps = vec![sample_stdio_mcp()];
 
-        write_project_config(temp_dir.path(), &mcps).unwrap();
+        write_project_config(temp_dir.path(), &mcps, &LocalFileOps).unwrap();
 
         // Per official spec, .mcp.json should be in project root, not .claude/
         let config_path = temp_dir.path().join(".mcp.json");
@@ -481,7 +474,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let mcps = vec![sample_stdio_mcp()];
 
-        write_project_config(temp_dir.path(), &mcps).unwrap();
+        write_project_config(temp_dir.path(), &mcps, &LocalFileOps).unwrap();
 
         let config_path = temp_dir.path().join(".mcp.json");
         let content = std::fs::read_to_string(config_path).unwrap();
@@ -496,11 +489,11 @@ mod tests {
 
         // Write first config
         let mcps1 = vec![sample_stdio_mcp()];
-        write_project_config(temp_dir.path(), &mcps1).unwrap();
+        write_project_config(temp_dir.path(), &mcps1, &LocalFileOps).unwrap();
 
         // Write second config
         let mcps2 = vec![sample_sse_mcp()];
-        write_project_config(temp_dir.path(), &mcps2).unwrap();
+        write_project_config(temp_dir.path(), &mcps2, &LocalFileOps).unwrap();
 
         // Verify second config is written
         let config_path = temp_dir.path().join(".mcp.json");
@@ -532,7 +525,7 @@ mod tests {
 
         // Sync with new MCPs
         let mcps = vec![sample_stdio_mcp()];
-        write_project_config(temp_dir.path(), &mcps).unwrap();
+        write_project_config(temp_dir.path(), &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&config_path).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -556,7 +549,7 @@ mod tests {
         std::fs::write(&config_path, r#"{"mcpServers": {}}"#).unwrap();
 
         let mcps = vec![sample_stdio_mcp()];
-        write_project_config(temp_dir.path(), &mcps).unwrap();
+        write_project_config(temp_dir.path(), &mcps, &LocalFileOps).unwrap();
 
         assert!(backup_path.exists());
     }
@@ -570,7 +563,7 @@ mod tests {
         std::fs::write(&config_path, "not valid json {{{").unwrap();
 
         let mcps = vec![sample_stdio_mcp()];
-        let result = write_project_config(temp_dir.path(), &mcps);
+        let result = write_project_config(temp_dir.path(), &mcps, &LocalFileOps);
 
         assert!(result.is_err());
         assert!(result
@@ -599,7 +592,7 @@ mod tests {
 
         // Sync with empty MCPs (the original bug scenario)
         let mcps: Vec<McpTuple> = vec![];
-        write_project_config(temp_dir.path(), &mcps).unwrap();
+        write_project_config(temp_dir.path(), &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&config_path).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -700,7 +693,7 @@ mod tests {
         };
 
         let mcps = vec![sample_stdio_mcp()];
-        write_global_config(&paths, &mcps).unwrap();
+        write_global_config(&paths, &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&paths.claude_json).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -730,7 +723,7 @@ mod tests {
         .unwrap();
 
         let mcps = vec![sample_stdio_mcp()];
-        write_global_config(&paths, &mcps).unwrap();
+        write_global_config(&paths, &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&paths.claude_json).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -756,7 +749,7 @@ mod tests {
         std::fs::write(&paths.claude_json, "not valid json").unwrap();
 
         let mcps = vec![sample_stdio_mcp()];
-        let result = write_global_config(&paths, &mcps);
+        let result = write_global_config(&paths, &mcps, &LocalFileOps);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -795,7 +788,7 @@ mod tests {
             true,
         )];
 
-        write_project_to_claude_json(&paths, "/tmp/project", &mcps).unwrap();
+        write_project_to_claude_json(&paths, "/tmp/project", &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&paths.claude_json).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -830,7 +823,7 @@ mod tests {
             false, // disabled
         )];
 
-        write_project_to_claude_json(&paths, "/tmp/proj", &mcps).unwrap();
+        write_project_to_claude_json(&paths, "/tmp/proj", &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&paths.claude_json).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -869,7 +862,7 @@ mod tests {
             true,
         )];
 
-        write_project_to_claude_json(&paths, "/tmp/proj", &mcps).unwrap();
+        write_project_to_claude_json(&paths, "/tmp/proj", &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&paths.claude_json).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -909,7 +902,7 @@ mod tests {
             true,
         )];
 
-        write_project_to_claude_json(&paths, "/tmp/proj", &mcps).unwrap();
+        write_project_to_claude_json(&paths, "/tmp/proj", &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&paths.claude_json).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -948,7 +941,7 @@ mod tests {
             true,
         )];
 
-        write_project_to_claude_json(&paths, "/tmp/proj", &mcps).unwrap();
+        write_project_to_claude_json(&paths, "/tmp/proj", &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&paths.claude_json).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -985,7 +978,7 @@ mod tests {
             true,
         )];
 
-        write_project_to_claude_json(&paths, "/tmp/proj", &mcps).unwrap();
+        write_project_to_claude_json(&paths, "/tmp/proj", &mcps, &LocalFileOps).unwrap();
         assert!(paths.claude_json.exists());
     }
 
@@ -1124,7 +1117,7 @@ mod tests {
             true,
         )];
 
-        write_project_to_claude_json(&paths, "/tmp/proj", &mcps).unwrap();
+        write_project_to_claude_json(&paths, "/tmp/proj", &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&paths.claude_json).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -1165,7 +1158,7 @@ mod tests {
             true,
         )];
 
-        write_project_to_claude_json(&paths, "/tmp/proj", &mcps).unwrap();
+        write_project_to_claude_json(&paths, "/tmp/proj", &mcps, &LocalFileOps).unwrap();
 
         // Backup should exist
         let bak_path = paths.claude_json.with_extension("json.bak");
@@ -1224,7 +1217,7 @@ mod tests {
             ),
         ];
 
-        write_project_to_claude_json(&paths, "/tmp/proj", &mcps).unwrap();
+        write_project_to_claude_json(&paths, "/tmp/proj", &mcps, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&paths.claude_json).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -1260,7 +1253,7 @@ mod tests {
         std::fs::write(&paths.claude_json, r#"{"existing": true}"#).unwrap();
 
         let mcps = vec![sample_stdio_mcp()];
-        write_global_config(&paths, &mcps).unwrap();
+        write_global_config(&paths, &mcps, &LocalFileOps).unwrap();
 
         let bak_path = paths.claude_json.with_extension("json.bak");
         assert!(bak_path.exists());
@@ -1314,7 +1307,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let mcps = vec![sample_stdio_mcp(), sample_sse_mcp(), sample_http_mcp()];
 
-        write_project_config(temp_dir.path(), &mcps).unwrap();
+        write_project_config(temp_dir.path(), &mcps, &LocalFileOps).unwrap();
 
         let config_path = temp_dir.path().join(".mcp.json");
         let content = std::fs::read_to_string(config_path).unwrap();
@@ -1355,7 +1348,7 @@ mod tests {
             true,
         )];
 
-        let result = write_project_to_claude_json(&paths, "/tmp/proj", &mcps);
+        let result = write_project_to_claude_json(&paths, "/tmp/proj", &mcps, &LocalFileOps);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

@@ -1,5 +1,6 @@
 use crate::db::{ClaudePaths, Database, GlobalMcp, Mcp};
 use crate::services::config_writer;
+use crate::services::remote::LocalFileOps;
 use crate::utils::paths;
 use rusqlite::params;
 use std::sync::{Arc, Mutex};
@@ -120,7 +121,7 @@ pub(crate) fn sync_global_config_from_db(db: &Database) -> Result<(), String> {
         match editor.as_str() {
             "claude_code" => {
                 let claude_paths = paths::get_claude_paths().map_err(|e| e.to_string())?;
-                config_writer::write_global_config(&claude_paths, &mcps)
+                config_writer::write_global_config(&claude_paths, &mcps, &LocalFileOps)
                     .map_err(|e| e.to_string())?;
                 info!("[Config] Wrote global config to Claude Code");
             }

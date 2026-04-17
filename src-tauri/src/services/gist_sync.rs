@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::db::models::{CreateMcpRequest, CreateSkillRequest};
 use crate::db::Database;
 use crate::services::memory_writer::{self, MemoryScope};
+use crate::services::remote::LocalFileOps;
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const USER_AGENT: &str = "claude-code-tool-manager/1.0";
@@ -455,7 +456,7 @@ pub fn build_local_payload(db: &Database, config: &SyncConfig) -> Result<SyncPay
 
     // Global CLAUDE.md
     if config.sync_global_claude_md {
-        let path = memory_writer::resolve_memory_path(&MemoryScope::User, None)?;
+        let path = memory_writer::resolve_memory_path(&MemoryScope::User, None, &LocalFileOps)?;
         if path.exists() {
             payload.global_claude_md = Some(std::fs::read_to_string(&path)?);
         }
@@ -515,7 +516,7 @@ pub fn build_local_payload(db: &Database, config: &SyncConfig) -> Result<SyncPay
             if config.sync_project_claude_mds.contains(&id_str) {
                 let project_path = Path::new(&project.path);
                 if let Ok(claude_md_path) =
-                    memory_writer::resolve_memory_path(&MemoryScope::Project, Some(project_path))
+                    memory_writer::resolve_memory_path(&MemoryScope::Project, Some(project_path), &LocalFileOps)
                 {
                     let content = if claude_md_path.exists() {
                         Some(std::fs::read_to_string(&claude_md_path)?)
@@ -552,7 +553,7 @@ pub fn apply_pulled_payload(
     // Global CLAUDE.md
     if config.sync_global_claude_md {
         if let Some(ref content) = payload.global_claude_md {
-            let path = memory_writer::resolve_memory_path(&MemoryScope::User, None)?;
+            let path = memory_writer::resolve_memory_path(&MemoryScope::User, None, &LocalFileOps)?;
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -675,6 +676,7 @@ pub fn apply_pulled_payload(
                     match memory_writer::resolve_memory_path(
                         &MemoryScope::Project,
                         Some(project_path),
+                        &LocalFileOps,
                     ) {
                         Ok(claude_md_path) => {
                             if let Some(parent) = claude_md_path.parent() {

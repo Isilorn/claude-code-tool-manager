@@ -13,6 +13,9 @@ pub trait FileOps: Send + Sync {
     fn create_dir_all(&self, path: &Path) -> Result<()>;
     fn copy(&self, from: &Path, to: &Path) -> Result<()>;
     fn remove_file(&self, path: &Path) -> Result<()>;
+    fn backup(&self, path: &Path) -> Result<()>;
+    fn remove_dir(&self, path: &Path) -> Result<()>;
+    fn metadata(&self, path: &Path) -> (Option<u64>, Option<String>);
 }
 
 // ============================================================================
@@ -48,6 +51,29 @@ impl FileOps for LocalFileOps {
     fn remove_file(&self, path: &Path) -> Result<()> {
         std::fs::remove_file(path)?;
         Ok(())
+    }
+
+    fn backup(&self, path: &Path) -> Result<()> {
+        crate::utils::backup::backup_file(path)
+    }
+
+    fn remove_dir(&self, path: &Path) -> Result<()> {
+        std::fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    fn metadata(&self, path: &Path) -> (Option<u64>, Option<String>) {
+        match std::fs::metadata(path) {
+            Ok(m) => {
+                let size = Some(m.len());
+                let modified = m.modified().ok().map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    dt.to_rfc3339()
+                });
+                (size, modified)
+            }
+            Err(_) => (None, None),
+        }
     }
 }
 
@@ -122,5 +148,24 @@ impl FileOps for SftpFileOps {
         let sftp = session.sftp()?;
         sftp.unlink(path)?;
         Ok(())
+    }
+
+    fn backup(&self, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn remove_dir(&self, path: &Path) -> Result<()> {
+        let session = self.session.lock()
+            .map_err(|_| anyhow::anyhow!("SSH session lock poisoned"))?;
+        let sftp = session.sftp()?;
+        for (entry_path, _stat) in sftp.readdir(path)? {
+            sftp.unlink(&entry_path)?;
+        }
+        sftp.rmdir(path)?;
+        Ok(())
+    }
+
+    fn metadata(&self, _path: &Path) -> (Option<u64>, Option<String>) {
+        (None, None)
     }
 }

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use super::claude_settings::{read_claude_settings_from_file, ClaudeSettings};
+use crate::services::remote::LocalFileOps;
 
 /// Info about the managed-settings.json file and its contents
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +44,7 @@ pub fn read_managed_settings_from_path(path: &Path) -> Result<ManagedSettingsInf
         });
     }
 
-    let settings = read_claude_settings_from_file(path, "managed")?;
+    let settings = read_claude_settings_from_file(path, "managed", &LocalFileOps)?;
     Ok(ManagedSettingsInfo {
         file_path,
         exists: true,

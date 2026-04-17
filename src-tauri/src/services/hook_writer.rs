@@ -1,4 +1,5 @@
 use crate::db::models::Hook;
+use crate::services::remote::FileOps;
 use anyhow::Result;
 use directories::BaseDirs;
 use serde_json::{json, Map, Value};
@@ -113,9 +114,9 @@ fn generate_hooks_config(hooks: &[Hook]) -> Value {
 }
 
 /// Read an existing settings.json file or return an empty object
-fn read_settings_file(path: &Path) -> Result<Value> {
-    if path.exists() {
-        let content = std::fs::read_to_string(path)?;
+fn read_settings_file(path: &Path, file_ops: &dyn FileOps) -> Result<Value> {
+    if file_ops.exists(path) {
+        let content = file_ops.read_string(path)?;
         Ok(serde_json::from_str(&content).unwrap_or(json!({})))
     } else {
         Ok(json!({}))
@@ -123,30 +124,26 @@ fn read_settings_file(path: &Path) -> Result<Value> {
 }
 
 /// Write settings.json file, preserving other settings
-fn write_settings_file(path: &Path, settings: &Value) -> Result<()> {
-    // Ensure parent directory exists
+fn write_settings_file(path: &Path, settings: &Value, file_ops: &dyn FileOps) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        file_ops.create_dir_all(parent)?;
     }
-
-    crate::utils::backup::backup_file(path)?;
-
+    file_ops.backup(path)?;
     let content = serde_json::to_string_pretty(settings)?;
-    std::fs::write(path, content)?;
+    file_ops.write_string(path, &content)?;
     Ok(())
 }
 
 /// Write hooks to the global settings file (~/.claude/settings.json)
-pub fn write_global_hooks(hooks: &[Hook]) -> Result<()> {
+pub fn write_global_hooks(hooks: &[Hook], file_ops: &dyn FileOps) -> Result<()> {
     let base_dirs =
         BaseDirs::new().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
     let home = base_dirs.home_dir();
     let settings_path = home.join(".claude").join("settings.json");
 
-    let mut settings = read_settings_file(&settings_path)?;
+    let mut settings = read_settings_file(&settings_path, file_ops)?;
 
     if hooks.is_empty() {
-        // Remove hooks key if no hooks
         if let Some(obj) = settings.as_object_mut() {
             obj.remove("hooks");
         }
@@ -154,17 +151,16 @@ pub fn write_global_hooks(hooks: &[Hook]) -> Result<()> {
         settings["hooks"] = generate_hooks_config(hooks);
     }
 
-    write_settings_file(&settings_path, &settings)
+    write_settings_file(&settings_path, &settings, file_ops)
 }
 
 /// Write hooks to a project's settings file ({project}/.claude/settings.local.json)
-pub fn write_project_hooks(project_path: &Path, hooks: &[Hook]) -> Result<()> {
+pub fn write_project_hooks(project_path: &Path, hooks: &[Hook], file_ops: &dyn FileOps) -> Result<()> {
     let settings_path = project_path.join(".claude").join("settings.local.json");
 
-    let mut settings = read_settings_file(&settings_path)?;
+    let mut settings = read_settings_file(&settings_path, file_ops)?;
 
     if hooks.is_empty() {
-        // Remove hooks key if no hooks
         if let Some(obj) = settings.as_object_mut() {
             obj.remove("hooks");
         }
@@ -172,7 +168,7 @@ pub fn write_project_hooks(project_path: &Path, hooks: &[Hook]) -> Result<()> {
         settings["hooks"] = generate_hooks_config(hooks);
     }
 
-    write_settings_file(&settings_path, &settings)
+    write_settings_file(&settings_path, &settings, file_ops)
 }
 
 /// Convert hooks to Claude Code settings.json format for export
@@ -186,6 +182,7 @@ pub fn hooks_to_settings_format(hooks: &[Hook]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::remote::LocalFileOps;
 
     #[test]
     fn test_generate_hooks_config() {
@@ -452,7 +449,7 @@ mod tests {
             updated_at: "2024-01-01".to_string(),
         }];
 
-        let result = write_project_hooks(&project_path, &hooks);
+        let result = write_project_hooks(&project_path, &hooks, &LocalFileOps);
         assert!(result.is_ok());
 
         let settings_path = project_path.join(".claude").join("settings.local.json");
@@ -504,7 +501,7 @@ mod tests {
             updated_at: "2024-01-01".to_string(),
         }];
 
-        write_project_hooks(project_path, &hooks).unwrap();
+        write_project_hooks(project_path, &hooks, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let json: Value = serde_json::from_str(&content).unwrap();
@@ -529,7 +526,7 @@ mod tests {
         std::fs::write(&settings_path, r#"{"hooks":{"Stop":[]},"other":"val"}"#).unwrap();
 
         let hooks: Vec<Hook> = vec![];
-        write_project_hooks(project_path, &hooks).unwrap();
+        write_project_hooks(project_path, &hooks, &LocalFileOps).unwrap();
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let json: Value = serde_json::from_str(&content).unwrap();
@@ -610,7 +607,7 @@ mod tests {
     fn test_read_settings_file_nonexistent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nonexistent.json");
-        let val = read_settings_file(&path).unwrap();
+        let val = read_settings_file(&path, &LocalFileOps).unwrap();
         assert_eq!(val, json!({}));
     }
 
@@ -619,7 +616,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad.json");
         std::fs::write(&path, "not valid json").unwrap();
-        let val = read_settings_file(&path).unwrap();
+        let val = read_settings_file(&path, &LocalFileOps).unwrap();
         assert_eq!(val, json!({}));
     }
 
@@ -627,7 +624,7 @@ mod tests {
     fn test_write_settings_file_creates_parents() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub").join("deep").join("settings.json");
-        write_settings_file(&path, &json!({"ok": true})).unwrap();
+        write_settings_file(&path, &json!({"ok": true}), &LocalFileOps).unwrap();
         assert!(path.exists());
     }
 }

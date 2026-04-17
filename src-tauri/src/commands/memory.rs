@@ -1,4 +1,5 @@
 use crate::services::memory_writer::{self, AllMemoryFiles, MemoryFileInfo, MemoryScope};
+use crate::services::remote::LocalFileOps;
 use log::info;
 use std::path::Path;
 
@@ -19,7 +20,7 @@ pub fn get_all_memory_files(project_path: Option<String>) -> Result<AllMemoryFil
         project_path
     );
     let pp = project_path.as_deref().map(Path::new);
-    memory_writer::read_all_memory_files(pp).map_err(|e| e.to_string())
+    memory_writer::read_all_memory_files(pp, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 /// Get a single memory file by scope
@@ -34,7 +35,7 @@ pub fn get_memory_file(
     );
     let ms = parse_scope(&scope)?;
     let pp = project_path.as_deref().map(Path::new);
-    memory_writer::read_memory_file(&ms, pp).map_err(|e| e.to_string())
+    memory_writer::read_memory_file(&ms, pp, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 /// Save content to a memory file
@@ -51,7 +52,7 @@ pub fn save_memory_file(
     );
     let ms = parse_scope(&scope)?;
     let pp = project_path.as_deref().map(Path::new);
-    memory_writer::write_memory_file(&ms, pp, &content).map_err(|e| e.to_string())
+    memory_writer::write_memory_file(&ms, pp, &content, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 /// Delete a memory file
@@ -60,7 +61,7 @@ pub fn delete_memory_file(scope: String, project_path: Option<String>) -> Result
     info!("[Memory] Deleting memory file for scope={}", scope);
     let ms = parse_scope(&scope)?;
     let pp = project_path.as_deref().map(Path::new);
-    memory_writer::delete_memory_file(&ms, pp).map_err(|e| e.to_string())
+    memory_writer::delete_memory_file(&ms, pp, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 /// Create a new memory file with optional initial content
@@ -74,7 +75,7 @@ pub fn create_memory_file(
     let ms = parse_scope(&scope)?;
     let pp = project_path.as_deref().map(Path::new);
     let initial_content = content.unwrap_or_default();
-    memory_writer::write_memory_file(&ms, pp, &initial_content).map_err(|e| e.to_string())
+    memory_writer::write_memory_file(&ms, pp, &initial_content, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 /// Detect which project memory location variant is in use
@@ -86,7 +87,7 @@ pub fn detect_project_memory_location(project_path: String) -> Result<(String, S
     );
     let path = Path::new(&project_path);
     let (resolved_path, variant) =
-        memory_writer::detect_project_memory_location(path).map_err(|e| e.to_string())?;
+        memory_writer::detect_project_memory_location(path, &LocalFileOps).map_err(|e| e.to_string())?;
     Ok((resolved_path.to_string_lossy().to_string(), variant))
 }
 

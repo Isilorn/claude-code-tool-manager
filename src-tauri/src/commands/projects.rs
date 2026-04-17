@@ -1,5 +1,6 @@
 use crate::db::{CreateProjectRequest, Database, Mcp, Project, ProjectMcp};
 use crate::services::config_writer;
+use crate::services::remote::LocalFileOps;
 use log::{error, info, warn};
 use rusqlite::params;
 use std::path::PathBuf;
@@ -153,7 +154,7 @@ pub fn add_project(
     // Register project in claude.json (even with no MCPs)
     if let Ok(paths) = get_claude_paths() {
         let empty_mcps: Vec<config_writer::McpWithEnabledTuple> = vec![];
-        let _ = config_writer::write_project_to_claude_json(&paths, &project.path, &empty_mcps);
+        let _ = config_writer::write_project_to_claude_json(&paths, &project.path, &empty_mcps, &LocalFileOps);
     }
 
     Ok(Project {
@@ -300,7 +301,7 @@ pub fn sync_project_config(
             "claude_code" => {
                 // Claude Code: Write to claude.json (includes disabled state)
                 let paths = get_claude_paths().map_err(|e| e.to_string())?;
-                config_writer::write_project_to_claude_json(&paths, &path, &mcps_with_enabled)
+                config_writer::write_project_to_claude_json(&paths, &path, &mcps_with_enabled, &LocalFileOps)
                     .map_err(|e| e.to_string())?;
 
                 // Also write .mcp.json for enabled MCPs only (legacy support)
@@ -320,7 +321,7 @@ pub fn sync_project_config(
                     })
                     .collect();
 
-                config_writer::write_project_config(&project_path, &enabled_mcps)
+                config_writer::write_project_config(&project_path, &enabled_mcps, &LocalFileOps)
                     .map_err(|e| e.to_string())?;
 
                 info!(

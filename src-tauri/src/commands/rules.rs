@@ -1,6 +1,7 @@
 use crate::db::models::{CreateRuleRequest, GlobalRule, ProjectRule, Rule};
 use crate::db::schema::Database;
 use crate::services::rule_writer;
+use crate::services::remote::LocalFileOps;
 use rusqlite::params;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -215,7 +216,7 @@ pub fn add_global_rule(db: State<'_, Arc<Mutex<Database>>>, rule_id: i64) -> Res
         )
         .map_err(|e| e.to_string())?;
 
-    rule_writer::write_global_rule(&rule).map_err(|e| e.to_string())?;
+    rule_writer::write_global_rule(&rule, &LocalFileOps).map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -235,7 +236,7 @@ pub fn remove_global_rule(db: State<'_, Arc<Mutex<Database>>>, rule_id: i64) -> 
         .execute("DELETE FROM global_rules WHERE rule_id = ?", [rule_id])
         .map_err(|e| e.to_string())?;
 
-    rule_writer::delete_global_rule(&rule).map_err(|e| e.to_string())?;
+    rule_writer::delete_global_rule(&rule, &LocalFileOps).map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -269,9 +270,9 @@ pub fn toggle_global_rule(
         .map_err(|e| e.to_string())?;
 
     if enabled {
-        rule_writer::write_global_rule(&rule).map_err(|e| e.to_string())?;
+        rule_writer::write_global_rule(&rule, &LocalFileOps).map_err(|e| e.to_string())?;
     } else {
-        rule_writer::delete_global_rule(&rule).map_err(|e| e.to_string())?;
+        rule_writer::delete_global_rule(&rule, &LocalFileOps).map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -345,7 +346,7 @@ pub fn assign_rule_to_project(
         )
         .map_err(|e| e.to_string())?;
 
-    rule_writer::write_project_rule(Path::new(&project_path), &rule).map_err(|e| e.to_string())?;
+    rule_writer::write_project_rule(Path::new(&project_path), &rule, &LocalFileOps).map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -381,7 +382,7 @@ pub fn remove_rule_from_project(
         )
         .map_err(|e| e.to_string())?;
 
-    rule_writer::delete_project_rule(Path::new(&project_path), &rule).map_err(|e| e.to_string())?;
+    rule_writer::delete_project_rule(Path::new(&project_path), &rule, &LocalFileOps).map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -420,10 +421,10 @@ pub fn toggle_project_rule(
     };
 
     if enabled {
-        rule_writer::write_project_rule(Path::new(&project_path), &rule)
+        rule_writer::write_project_rule(Path::new(&project_path), &rule, &LocalFileOps)
             .map_err(|e| e.to_string())?;
     } else {
-        rule_writer::delete_project_rule(Path::new(&project_path), &rule)
+        rule_writer::delete_project_rule(Path::new(&project_path), &rule, &LocalFileOps)
             .map_err(|e| e.to_string())?;
     }
 

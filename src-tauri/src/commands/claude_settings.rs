@@ -1,5 +1,6 @@
 use crate::services::claude_settings::{self, AllClaudeSettings, ClaudeSettings};
 use crate::services::permission_writer::PermissionScope;
+use crate::services::remote::LocalFileOps;
 use log::info;
 use std::path::Path;
 
@@ -20,7 +21,7 @@ pub fn get_all_claude_settings(project_path: Option<String>) -> Result<AllClaude
         project_path
     );
     let pp = project_path.as_deref().map(Path::new);
-    claude_settings::read_all_claude_settings(pp).map_err(|e| e.to_string())
+    claude_settings::read_all_claude_settings(pp, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 /// Get claude settings for a specific scope
@@ -37,7 +38,7 @@ pub fn get_claude_settings(
     let pp = project_path.as_deref().map(Path::new);
     let path = crate::services::permission_writer::resolve_settings_path(&ps, pp)
         .map_err(|e| e.to_string())?;
-    claude_settings::read_claude_settings_from_file(&path, &scope).map_err(|e| e.to_string())
+    claude_settings::read_claude_settings_from_file(&path, &scope, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 /// Save claude settings for a specific scope
@@ -54,12 +55,12 @@ pub fn save_claude_settings(
     let ps = parse_scope(&scope)?;
     let pp = project_path.as_deref().map(Path::new);
 
-    claude_settings::write_claude_settings(&ps, pp, &settings).map_err(|e| e.to_string())?;
+    claude_settings::write_claude_settings(&ps, pp, &settings, &LocalFileOps).map_err(|e| e.to_string())?;
 
     // Re-read to return updated state
     let path = crate::services::permission_writer::resolve_settings_path(&ps, pp)
         .map_err(|e| e.to_string())?;
-    claude_settings::read_claude_settings_from_file(&path, &scope).map_err(|e| e.to_string())
+    claude_settings::read_claude_settings_from_file(&path, &scope, &LocalFileOps).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+use crate::services::remote::FileOps;
 use anyhow::Result;
 use directories::BaseDirs;
 use pulldown_cmark::{html, Options, Parser};
@@ -35,7 +36,7 @@ pub struct AllMemoryFiles {
 }
 
 /// Resolve the CLAUDE.md file path for a given scope
-pub fn resolve_memory_path(scope: &MemoryScope, project_path: Option<&Path>) -> Result<PathBuf> {
+pub fn resolve_memory_path(scope: &MemoryScope, project_path: Option<&Path>, file_ops: &dyn FileOps) -> Result<PathBuf> {
     match scope {
         MemoryScope::User => {
             let base_dirs =
@@ -45,15 +46,13 @@ pub fn resolve_memory_path(scope: &MemoryScope, project_path: Option<&Path>) -> 
         MemoryScope::Project => {
             let project = project_path
                 .ok_or_else(|| anyhow::anyhow!("Project path required for project scope"))?;
-            // Check .claude/CLAUDE.md first, then CLAUDE.md at root
             let dotclaude_path = project.join(".claude").join("CLAUDE.md");
             let root_path = project.join("CLAUDE.md");
-            if dotclaude_path.exists() {
+            if file_ops.exists(&dotclaude_path) {
                 Ok(dotclaude_path)
-            } else if root_path.exists() {
+            } else if file_ops.exists(&root_path) {
                 Ok(root_path)
             } else {
-                // Default to root CLAUDE.md for new files
                 Ok(root_path)
             }
         }
@@ -67,16 +66,15 @@ pub fn resolve_memory_path(scope: &MemoryScope, project_path: Option<&Path>) -> 
 
 /// Detect which project memory location variant is in use
 /// Returns (path, variant) where variant is "root" or ".claude"
-pub fn detect_project_memory_location(project_path: &Path) -> Result<(PathBuf, String)> {
+pub fn detect_project_memory_location(project_path: &Path, file_ops: &dyn FileOps) -> Result<(PathBuf, String)> {
     let dotclaude_path = project_path.join(".claude").join("CLAUDE.md");
     let root_path = project_path.join("CLAUDE.md");
 
-    if dotclaude_path.exists() {
+    if file_ops.exists(&dotclaude_path) {
         Ok((dotclaude_path, ".claude".to_string()))
-    } else if root_path.exists() {
+    } else if file_ops.exists(&root_path) {
         Ok((root_path, "root".to_string()))
     } else {
-        // Neither exists yet — default to root
         Ok((root_path, "root".to_string()))
     }
 }
@@ -85,6 +83,7 @@ pub fn detect_project_memory_location(project_path: &Path) -> Result<(PathBuf, S
 pub fn read_memory_file(
     scope: &MemoryScope,
     project_path: Option<&Path>,
+    file_ops: &dyn FileOps,
 ) -> Result<MemoryFileInfo> {
     let scope_str = match scope {
         MemoryScope::User => "user",
@@ -92,19 +91,13 @@ pub fn read_memory_file(
         MemoryScope::Local => "local",
     };
 
-    let path = resolve_memory_path(scope, project_path)?;
+    let path = resolve_memory_path(scope, project_path, file_ops)?;
     let path_str = path.to_string_lossy().to_string();
 
-    if path.exists() {
-        let content = std::fs::read_to_string(&path)?;
-        // Normalize \r\n to \n
+    if file_ops.exists(&path) {
+        let content = file_ops.read_string(&path)?;
         let content = content.replace("\r\n", "\n");
-        let metadata = std::fs::metadata(&path)?;
-        let last_modified = metadata.modified().ok().map(|t| {
-            let datetime: chrono::DateTime<chrono::Utc> = t.into();
-            datetime.to_rfc3339()
-        });
-        let size_bytes = Some(metadata.len());
+        let (size_bytes, last_modified) = file_ops.metadata(&path);
 
         Ok(MemoryFileInfo {
             scope: scope_str.to_string(),
@@ -127,12 +120,12 @@ pub fn read_memory_file(
 }
 
 /// Read all memory files across all three scopes
-pub fn read_all_memory_files(project_path: Option<&Path>) -> Result<AllMemoryFiles> {
-    let user = read_memory_file(&MemoryScope::User, None)?;
+pub fn read_all_memory_files(project_path: Option<&Path>, file_ops: &dyn FileOps) -> Result<AllMemoryFiles> {
+    let user = read_memory_file(&MemoryScope::User, None, file_ops)?;
 
     let (project, local) = if let Some(pp) = project_path {
-        let project_info = read_memory_file(&MemoryScope::Project, Some(pp))?;
-        let local_info = read_memory_file(&MemoryScope::Local, Some(pp))?;
+        let project_info = read_memory_file(&MemoryScope::Project, Some(pp), file_ops)?;
+        let local_info = read_memory_file(&MemoryScope::Local, Some(pp), file_ops)?;
         (Some(project_info), Some(local_info))
     } else {
         (None, None)
@@ -150,25 +143,25 @@ pub fn write_memory_file(
     scope: &MemoryScope,
     project_path: Option<&Path>,
     content: &str,
+    file_ops: &dyn FileOps,
 ) -> Result<MemoryFileInfo> {
-    let path = resolve_memory_path(scope, project_path)?;
+    let path = resolve_memory_path(scope, project_path, file_ops)?;
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        file_ops.create_dir_all(parent)?;
     }
 
-    crate::utils::backup::backup_file(&path)?;
-    std::fs::write(&path, content)?;
+    file_ops.backup(&path)?;
+    file_ops.write_string(&path, content)?;
 
-    // Read back the file info to return updated metadata
-    read_memory_file(scope, project_path)
+    read_memory_file(scope, project_path, file_ops)
 }
 
 /// Delete a memory file. No error if the file doesn't exist.
-pub fn delete_memory_file(scope: &MemoryScope, project_path: Option<&Path>) -> Result<()> {
-    let path = resolve_memory_path(scope, project_path)?;
-    if path.exists() {
-        std::fs::remove_file(&path)?;
+pub fn delete_memory_file(scope: &MemoryScope, project_path: Option<&Path>, file_ops: &dyn FileOps) -> Result<()> {
+    let path = resolve_memory_path(scope, project_path, file_ops)?;
+    if file_ops.exists(&path) {
+        file_ops.remove_file(&path)?;
     }
     Ok(())
 }
@@ -189,13 +182,14 @@ pub fn render_markdown(content: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::remote::LocalFileOps;
 
     #[test]
     fn test_read_nonexistent_memory_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path();
 
-        let info = read_memory_file(&MemoryScope::Project, Some(path)).unwrap();
+        let info = read_memory_file(&MemoryScope::Project, Some(path), &LocalFileOps).unwrap();
         assert!(!info.exists);
         assert!(info.content.is_empty());
         assert_eq!(info.scope, "project");
@@ -207,7 +201,7 @@ mod tests {
         let path = dir.path();
 
         let content = "# My Project\n\nSome instructions here.";
-        let info = write_memory_file(&MemoryScope::Project, Some(path), content).unwrap();
+        let info = write_memory_file(&MemoryScope::Project, Some(path), content, &LocalFileOps).unwrap();
 
         assert!(info.exists);
         assert_eq!(info.content, content);
@@ -222,7 +216,7 @@ mod tests {
 
         // Writing to user scope would create ~/.claude/ but we test local scope
         let content = "# Local overrides";
-        let info = write_memory_file(&MemoryScope::Local, Some(path), content).unwrap();
+        let info = write_memory_file(&MemoryScope::Local, Some(path), content, &LocalFileOps).unwrap();
         assert!(info.exists);
         assert_eq!(info.content, content);
     }
@@ -233,10 +227,10 @@ mod tests {
         let path = dir.path();
 
         // Create then delete
-        write_memory_file(&MemoryScope::Local, Some(path), "temp content").unwrap();
-        delete_memory_file(&MemoryScope::Local, Some(path)).unwrap();
+        write_memory_file(&MemoryScope::Local, Some(path), "temp content", &LocalFileOps).unwrap();
+        delete_memory_file(&MemoryScope::Local, Some(path), &LocalFileOps).unwrap();
 
-        let info = read_memory_file(&MemoryScope::Local, Some(path)).unwrap();
+        let info = read_memory_file(&MemoryScope::Local, Some(path), &LocalFileOps).unwrap();
         assert!(!info.exists);
     }
 
@@ -246,7 +240,7 @@ mod tests {
         let path = dir.path();
 
         // Should not error
-        delete_memory_file(&MemoryScope::Local, Some(path)).unwrap();
+        delete_memory_file(&MemoryScope::Local, Some(path), &LocalFileOps).unwrap();
     }
 
     #[test]
@@ -260,7 +254,7 @@ mod tests {
         std::fs::create_dir_all(&dotclaude).unwrap();
         std::fs::write(dotclaude.join("CLAUDE.md"), "dotclaude content").unwrap();
 
-        let info = read_memory_file(&MemoryScope::Project, Some(path)).unwrap();
+        let info = read_memory_file(&MemoryScope::Project, Some(path), &LocalFileOps).unwrap();
         assert!(info.exists);
         assert_eq!(info.content, "dotclaude content");
     }
@@ -272,7 +266,7 @@ mod tests {
 
         std::fs::write(path.join("CLAUDE.md"), "root content").unwrap();
 
-        let info = read_memory_file(&MemoryScope::Project, Some(path)).unwrap();
+        let info = read_memory_file(&MemoryScope::Project, Some(path), &LocalFileOps).unwrap();
         assert!(info.exists);
         assert_eq!(info.content, "root content");
     }
@@ -283,19 +277,19 @@ mod tests {
         let path = dir.path();
 
         // Neither exists
-        let (_, variant) = detect_project_memory_location(path).unwrap();
+        let (_, variant) = detect_project_memory_location(path, &LocalFileOps).unwrap();
         assert_eq!(variant, "root");
 
         // Create root file
         std::fs::write(path.join("CLAUDE.md"), "root").unwrap();
-        let (_, variant) = detect_project_memory_location(path).unwrap();
+        let (_, variant) = detect_project_memory_location(path, &LocalFileOps).unwrap();
         assert_eq!(variant, "root");
 
         // Create .claude file (should take priority)
         let dotclaude = path.join(".claude");
         std::fs::create_dir_all(&dotclaude).unwrap();
         std::fs::write(dotclaude.join("CLAUDE.md"), "dotclaude").unwrap();
-        let (_, variant) = detect_project_memory_location(path).unwrap();
+        let (_, variant) = detect_project_memory_location(path, &LocalFileOps).unwrap();
         assert_eq!(variant, ".claude");
     }
 
@@ -317,7 +311,7 @@ mod tests {
         let file_path = path.join("CLAUDE.md");
         std::fs::write(&file_path, "line1\r\nline2\r\nline3").unwrap();
 
-        let info = read_memory_file(&MemoryScope::Project, Some(path)).unwrap();
+        let info = read_memory_file(&MemoryScope::Project, Some(path), &LocalFileOps).unwrap();
         assert_eq!(info.content, "line1\nline2\nline3");
     }
 
@@ -328,7 +322,7 @@ mod tests {
 
         std::fs::write(path.join("CLAUDE.md"), "").unwrap();
 
-        let info = read_memory_file(&MemoryScope::Project, Some(path)).unwrap();
+        let info = read_memory_file(&MemoryScope::Project, Some(path), &LocalFileOps).unwrap();
         assert!(info.exists);
         assert!(info.content.is_empty());
         assert_eq!(info.size_bytes, Some(0));
@@ -337,7 +331,7 @@ mod tests {
     #[test]
     fn test_read_all_memory_files_no_project() {
         // Without project path, only user is returned, project/local are None
-        let all = read_all_memory_files(None);
+        let all = read_all_memory_files(None, &LocalFileOps);
         assert!(all.is_ok());
         let all = all.unwrap();
         assert!(all.project.is_none());
@@ -349,7 +343,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path();
 
-        let all = read_all_memory_files(Some(path)).unwrap();
+        let all = read_all_memory_files(Some(path), &LocalFileOps).unwrap();
         assert!(all.project.is_some());
         assert!(all.local.is_some());
         // Project and local don't exist yet

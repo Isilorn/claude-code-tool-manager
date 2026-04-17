@@ -1,4 +1,5 @@
 use crate::db::models::Rule;
+use crate::services::remote::FileOps;
 use anyhow::Result;
 use directories::BaseDirs;
 use std::path::Path;
@@ -25,55 +26,55 @@ pub(crate) fn generate_rule_markdown(rule: &Rule) -> String {
 
 /// Write a rule to the appropriate location
 /// Rules go to {base_path}/.claude/rules/{name}.md
-pub fn write_rule_file(base_path: &Path, rule: &Rule) -> Result<()> {
+pub fn write_rule_file(base_path: &Path, rule: &Rule, file_ops: &dyn FileOps) -> Result<()> {
     let rules_dir = base_path.join(".claude").join("rules");
-    std::fs::create_dir_all(&rules_dir)?;
+    file_ops.create_dir_all(&rules_dir)?;
 
     let file_path = rules_dir.join(format!("{}.md", rule.name));
-    crate::utils::backup::backup_file(&file_path)?;
+    file_ops.backup(&file_path)?;
     let content = generate_rule_markdown(rule);
-    std::fs::write(file_path, content)?;
+    file_ops.write_string(&file_path, &content)?;
 
     Ok(())
 }
 
 /// Delete a rule file from the appropriate location
-pub fn delete_rule_file(base_path: &Path, rule: &Rule) -> Result<()> {
+pub fn delete_rule_file(base_path: &Path, rule: &Rule, file_ops: &dyn FileOps) -> Result<()> {
     let file_path = base_path
         .join(".claude")
         .join("rules")
         .join(format!("{}.md", rule.name));
-    if file_path.exists() {
-        std::fs::remove_file(file_path)?;
+    if file_ops.exists(&file_path) {
+        file_ops.remove_file(&file_path)?;
     }
 
     Ok(())
 }
 
 /// Write a rule to the global Claude config (~/.claude/rules/)
-pub fn write_global_rule(rule: &Rule) -> Result<()> {
+pub fn write_global_rule(rule: &Rule, file_ops: &dyn FileOps) -> Result<()> {
     let base_dirs =
         BaseDirs::new().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
     let home = base_dirs.home_dir();
-    write_rule_file(home, rule)
+    write_rule_file(home, rule, file_ops)
 }
 
 /// Delete a rule from the global Claude config (~/.claude/rules/)
-pub fn delete_global_rule(rule: &Rule) -> Result<()> {
+pub fn delete_global_rule(rule: &Rule, file_ops: &dyn FileOps) -> Result<()> {
     let base_dirs =
         BaseDirs::new().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
     let home = base_dirs.home_dir();
-    delete_rule_file(home, rule)
+    delete_rule_file(home, rule, file_ops)
 }
 
 /// Write a rule to a project's Claude config ({project}/.claude/rules/)
-pub fn write_project_rule(project_path: &Path, rule: &Rule) -> Result<()> {
-    write_rule_file(project_path, rule)
+pub fn write_project_rule(project_path: &Path, rule: &Rule, file_ops: &dyn FileOps) -> Result<()> {
+    write_rule_file(project_path, rule, file_ops)
 }
 
 /// Delete a rule from a project's Claude config ({project}/.claude/rules/)
-pub fn delete_project_rule(project_path: &Path, rule: &Rule) -> Result<()> {
-    delete_rule_file(project_path, rule)
+pub fn delete_project_rule(project_path: &Path, rule: &Rule, file_ops: &dyn FileOps) -> Result<()> {
+    delete_rule_file(project_path, rule, file_ops)
 }
 
 /// Create a symlink from one rule to another location
@@ -99,6 +100,7 @@ pub fn create_rule_symlink(source_path: &Path, target_path: &Path) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::remote::LocalFileOps;
     use tempfile::TempDir;
 
     fn sample_rule() -> Rule {
@@ -164,7 +166,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let rule = sample_rule();
 
-        write_rule_file(temp_dir.path(), &rule).unwrap();
+        write_rule_file(temp_dir.path(), &rule, &LocalFileOps).unwrap();
 
         let expected_path = temp_dir
             .path()
@@ -179,7 +181,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let rule = sample_rule();
 
-        write_rule_file(temp_dir.path(), &rule).unwrap();
+        write_rule_file(temp_dir.path(), &rule, &LocalFileOps).unwrap();
 
         let file_path = temp_dir
             .path()
@@ -197,7 +199,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let rule = sample_rule();
 
-        write_rule_file(temp_dir.path(), &rule).unwrap();
+        write_rule_file(temp_dir.path(), &rule, &LocalFileOps).unwrap();
         let file_path = temp_dir
             .path()
             .join(".claude")
@@ -205,7 +207,7 @@ mod tests {
             .join("typescript-strict.md");
         assert!(file_path.exists());
 
-        delete_rule_file(temp_dir.path(), &rule).unwrap();
+        delete_rule_file(temp_dir.path(), &rule, &LocalFileOps).unwrap();
         assert!(!file_path.exists());
     }
 
@@ -214,7 +216,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let rule = sample_rule();
 
-        let result = delete_rule_file(temp_dir.path(), &rule);
+        let result = delete_rule_file(temp_dir.path(), &rule, &LocalFileOps);
         assert!(result.is_ok());
     }
 
@@ -222,10 +224,10 @@ mod tests {
     fn test_write_rule_overwrite() {
         let temp_dir = TempDir::new().unwrap();
         let mut rule = sample_rule();
-        write_rule_file(temp_dir.path(), &rule).unwrap();
+        write_rule_file(temp_dir.path(), &rule, &LocalFileOps).unwrap();
 
         rule.content = "Updated content".to_string();
-        write_rule_file(temp_dir.path(), &rule).unwrap();
+        write_rule_file(temp_dir.path(), &rule, &LocalFileOps).unwrap();
 
         let file_path = temp_dir
             .path()
@@ -240,7 +242,7 @@ mod tests {
     fn test_write_project_rule() {
         let temp_dir = TempDir::new().unwrap();
         let rule = sample_rule();
-        write_project_rule(temp_dir.path(), &rule).unwrap();
+        write_project_rule(temp_dir.path(), &rule, &LocalFileOps).unwrap();
 
         let expected = temp_dir
             .path()
@@ -254,8 +256,8 @@ mod tests {
     fn test_delete_project_rule() {
         let temp_dir = TempDir::new().unwrap();
         let rule = sample_rule();
-        write_project_rule(temp_dir.path(), &rule).unwrap();
-        delete_project_rule(temp_dir.path(), &rule).unwrap();
+        write_project_rule(temp_dir.path(), &rule, &LocalFileOps).unwrap();
+        delete_project_rule(temp_dir.path(), &rule, &LocalFileOps).unwrap();
 
         let expected = temp_dir
             .path()
@@ -270,7 +272,7 @@ mod tests {
     fn test_create_rule_symlink() {
         let temp_dir = TempDir::new().unwrap();
         let rule = sample_rule();
-        write_rule_file(temp_dir.path(), &rule).unwrap();
+        write_rule_file(temp_dir.path(), &rule, &LocalFileOps).unwrap();
 
         let source = temp_dir
             .path()
