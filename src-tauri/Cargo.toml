@@ -40,6 +40,10 @@ walkdir = "2"
 # SQLite
 rusqlite = { version = "0.39", features = ["bundled"] }
 
+# SSH remote support
+ssh2 = "0.9"
+libssh2-sys = { version = "0.3", features = ["vendored-openssl"] }
+
 # Docker
 bollard = "0.18"
 once_cell = "1"

@@ -24,6 +24,7 @@ pub mod opencode_config;
 pub mod permission_writer;
 pub mod repo_parser;
 pub mod repo_sync;
+pub mod remote;
 pub mod rule_writer;
 pub mod scanner;
 pub mod session_explorer;
