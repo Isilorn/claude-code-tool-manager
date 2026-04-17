@@ -806,6 +806,37 @@ pub struct CreateDockerHostRequest {
 }
 
 // ========================================================================
+// Remote Machine Models
+// ========================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteMachine {
+    pub id: i64,
+    pub label: String,
+    pub host: String,
+    pub port: i64,
+    pub username: String,
+    pub auth_method: String, // "key" or "agent"
+    pub key_path: Option<String>,
+    pub known_host_key: Option<String>,
+    pub remote_home: Option<String>,
+    pub last_connected_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRemoteMachineRequest {
+    pub label: String,
+    pub host: String,
+    pub port: Option<i64>,
+    pub username: String,
+    pub auth_method: Option<String>,
+    pub key_path: Option<String>,
+}
+
+// ========================================================================
 // Container Models
 // ========================================================================
 

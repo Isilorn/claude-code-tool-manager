@@ -1127,6 +1127,37 @@ impl Database {
             }
         }
 
+        // Migration 25: Add remote_machines table for SSH remote support
+        let has_remote_machines: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='remote_machines'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !has_remote_machines {
+            self.conn.execute_batch(
+                r#"
+                CREATE TABLE remote_machines (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    label             TEXT NOT NULL,
+                    host              TEXT NOT NULL,
+                    port              INTEGER NOT NULL DEFAULT 22,
+                    username          TEXT NOT NULL,
+                    auth_method       TEXT NOT NULL DEFAULT 'key'
+                                      CHECK (auth_method IN ('key', 'agent')),
+                    key_path          TEXT,
+                    known_host_key    TEXT,
+                    remote_home       TEXT,
+                    last_connected_at TEXT,
+                    created_at        TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                "#,
+            )?;
+        }
+
         Ok(())
     }
 
@@ -1145,6 +1176,127 @@ impl Database {
         self.conn.execute(
             "INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
             [key, value],
+        )?;
+        Ok(())
+    }
+
+    // ========================================================================
+    // Remote Machine Methods
+    // ========================================================================
+
+    pub fn get_all_remote_machines(&self) -> Result<Vec<crate::db::models::RemoteMachine>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, label, host, port, username, auth_method, key_path,
+                    known_host_key, remote_home, last_connected_at, created_at
+             FROM remote_machines ORDER BY label",
+        )?;
+
+        let machines = stmt
+            .query_map([], |row| {
+                Ok(crate::db::models::RemoteMachine {
+                    id: row.get(0)?,
+                    label: row.get(1)?,
+                    host: row.get(2)?,
+                    port: row.get(3)?,
+                    username: row.get(4)?,
+                    auth_method: row.get(5)?,
+                    key_path: row.get(6)?,
+                    known_host_key: row.get(7)?,
+                    remote_home: row.get(8)?,
+                    last_connected_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(machines)
+    }
+
+    fn get_remote_machine(&self, id: i64) -> Result<crate::db::models::RemoteMachine> {
+        Ok(self.conn.query_row(
+            "SELECT id, label, host, port, username, auth_method, key_path,
+                    known_host_key, remote_home, last_connected_at, created_at
+             FROM remote_machines WHERE id = ?",
+            [id],
+            |row| {
+                Ok(crate::db::models::RemoteMachine {
+                    id: row.get(0)?,
+                    label: row.get(1)?,
+                    host: row.get(2)?,
+                    port: row.get(3)?,
+                    username: row.get(4)?,
+                    auth_method: row.get(5)?,
+                    key_path: row.get(6)?,
+                    known_host_key: row.get(7)?,
+                    remote_home: row.get(8)?,
+                    last_connected_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                })
+            },
+        )?)
+    }
+
+    pub fn create_remote_machine(
+        &self,
+        req: &crate::db::models::CreateRemoteMachineRequest,
+    ) -> Result<crate::db::models::RemoteMachine> {
+        self.conn.execute(
+            "INSERT INTO remote_machines (label, host, port, username, auth_method, key_path)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                req.label,
+                req.host,
+                req.port.unwrap_or(22),
+                req.username,
+                req.auth_method.as_deref().unwrap_or("key"),
+                req.key_path,
+            ],
+        )?;
+
+        let id = self.conn.last_insert_rowid();
+        self.get_remote_machine(id)
+    }
+
+    pub fn update_remote_machine(
+        &self,
+        id: i64,
+        req: &crate::db::models::CreateRemoteMachineRequest,
+    ) -> Result<crate::db::models::RemoteMachine> {
+        self.conn.execute(
+            "UPDATE remote_machines
+             SET label = ?, host = ?, port = ?, username = ?, auth_method = ?, key_path = ?
+             WHERE id = ?",
+            rusqlite::params![
+                req.label,
+                req.host,
+                req.port.unwrap_or(22),
+                req.username,
+                req.auth_method.as_deref().unwrap_or("key"),
+                req.key_path,
+                id,
+            ],
+        )?;
+
+        self.get_remote_machine(id)
+    }
+
+    pub fn delete_remote_machine(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM remote_machines WHERE id = ?", [id])?;
+        Ok(())
+    }
+
+    pub fn update_remote_machine_connection(
+        &self,
+        id: i64,
+        known_host_key: Option<&str>,
+        remote_home: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE remote_machines
+             SET known_host_key = ?, remote_home = ?, last_connected_at = CURRENT_TIMESTAMP
+             WHERE id = ?",
+            rusqlite::params![known_host_key, remote_home, id],
         )?;
         Ok(())
     }
