@@ -23,6 +23,7 @@ pub mod permissions;
 pub mod profiles;
 pub mod projects;
 pub mod repos;
+pub mod remote_machines;
 pub mod rules;
 pub mod scanner;
 pub mod sessions;

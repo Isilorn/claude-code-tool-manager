@@ -1212,7 +1212,7 @@ impl Database {
         Ok(machines)
     }
 
-    fn get_remote_machine(&self, id: i64) -> Result<crate::db::models::RemoteMachine> {
+    pub fn get_remote_machine(&self, id: i64) -> Result<crate::db::models::RemoteMachine> {
         Ok(self.conn.query_row(
             "SELECT id, label, host, port, username, auth_method, key_path,
                     known_host_key, remote_home, last_connected_at, created_at

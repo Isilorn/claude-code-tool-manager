@@ -13,6 +13,7 @@ use mcp_gateway::server::{GatewayServerConfig, GatewayServerState, DEFAULT_GATEW
 use mcp_server::server::{McpServerConfig, McpServerState, DEFAULT_MCP_SERVER_PORT};
 use services::docker::client::DockerClientManager;
 use services::mcp_session::McpSessionManager;
+use services::remote::{ActiveContext, SshSessionPool};
 
 pub fn run() {
     env_logger::init();
@@ -61,6 +62,10 @@ pub fn run() {
 
             // Initialize Docker client manager
             app.manage(Arc::new(DockerClientManager::new()));
+
+            // Initialize SSH session pool and active context for remote machine support
+            app.manage(Arc::new(Mutex::new(SshSessionPool::new())));
+            app.manage(Arc::new(Mutex::new(ActiveContext::new())));
 
             // Initialize MCP server state with config from database
             let mcp_server_config = {
@@ -525,6 +530,15 @@ pub fn run() {
             commands::cloud_sync::push_sync,
             commands::cloud_sync::pull_sync,
             commands::cloud_sync::get_sync_status,
+            // Remote Machine Commands
+            commands::remote_machines::list_remote_machines,
+            commands::remote_machines::add_remote_machine,
+            commands::remote_machines::update_remote_machine,
+            commands::remote_machines::delete_remote_machine,
+            commands::remote_machines::test_remote_connection,
+            commands::remote_machines::disconnect_remote_machine,
+            commands::remote_machines::set_active_machine,
+            commands::remote_machines::get_active_machine,
             // Docker Host Commands
             commands::docker_hosts::get_all_docker_hosts,
             commands::docker_hosts::create_docker_host,

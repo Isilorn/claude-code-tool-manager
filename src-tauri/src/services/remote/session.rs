@@ -126,6 +126,18 @@ impl SshSessionPool {
     }
 }
 
+/// Tracks which machine is currently "active" in the UI.
+/// None = local machine (default). Stored in Tauri state as Arc<Mutex<ActiveContext>>.
+pub struct ActiveContext {
+    pub machine_id: Option<i64>,
+}
+
+impl ActiveContext {
+    pub fn new() -> Self {
+        Self { machine_id: None }
+    }
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(":")
 }
